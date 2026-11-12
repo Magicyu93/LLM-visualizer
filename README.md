@@ -7,6 +7,10 @@ LLM Visualizer is a small local web app. It drives [Claude Code](https://docs.cl
 in headless mode and draws its trajectory as it happens. It can also replay recorded `stream-json`
 traces, either from Claude Code or from your own agent harness.
 
+![LLM Visualizer replaying a trace: the live dialogue with subagents, the per-round chat view, and the context inspector](docs/demo.gif)
+
+*Replaying `fixtures/harness_review_demo.jsonl`, stepping through rounds in the chat view, then the Context tab of `fixtures/harness_context_demo.jsonl`.*
+
 **Highlights**
 
 - **Live and replay:** run a prompt against a directory, or drop in a `.jsonl` trace and replay it at any speed.
