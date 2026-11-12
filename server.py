@@ -1,4 +1,4 @@
-"""Mads-Lens backend: spawns `claude -p ... --output-format stream-json` and streams its
+"""LLM Visualizer backend: spawns `claude -p ... --output-format stream-json` and streams its
 events to the browser as NDJSON (one JSON object per line).
 
 Besides Claude Code's own events, the server emits a few events of its own, all with
@@ -39,7 +39,7 @@ PERMISSION_ARGS = os.environ.get(
 # Optional: set ACCESS_TOKEN when the server is reachable from other machines.
 ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN")
 
-app = FastAPI(title="Mads-Lens")
+app = FastAPI(title="LLM Visualizer")
 
 # run_id -> live subprocess, so a run can be stopped
 RUNS: dict[str, asyncio.subprocess.Process] = {}
@@ -97,7 +97,7 @@ async def run_live(req: RunRequest, run_id: str, cwd: str):
     if req.session_id:
         args += ["--resume", req.session_id]
 
-    # An exported API key would take precedence over the Harvard login and bill that key.
+    # An exported API key would take precedence over your Claude Code login and bill that key.
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
 
     proc = await asyncio.create_subprocess_exec(

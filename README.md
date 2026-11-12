@@ -1,6 +1,21 @@
-# Assignment 1 — Mads-Lens
+# LLM Visualizer
 
-A web page that drives Claude Code in headless mode and shows the trajectory live.
+See exactly what an LLM agent does: every model call, tool call, subagent and context change, live
+or from a recorded trace.
+
+LLM Visualizer is a small local web app. It drives [Claude Code](https://docs.claude.com/en/docs/claude-code)
+in headless mode and draws its trajectory as it happens. It can also replay recorded `stream-json`
+traces, either from Claude Code or from your own agent harness.
+
+**Highlights**
+
+- **Live and replay:** run a prompt against a directory, or drop in a `.jsonl` trace and replay it at any speed.
+- **Subagents as a tree:** parallel subagents fork into named branches (A, B, A.1…) and join back.
+- **Per-round chat view:** each model call shown as the exact conversation the model received,
+  coloured by who wrote it (LLM, harness, tool output).
+- **Context inspector:** context size per request, plus pruning, clearing and compaction over the whole run.
+- **Request verification:** for harness traces, checks the rebuilt request against a SHA-256 digest of what was really sent.
+- **No build step:** FastAPI backend plus Preact + htm, with vendored dependencies.
 
 ## Run it
 
@@ -38,7 +53,7 @@ plays it again. The bottom bar also sets the speed (*Instant* shows the whole tr
 ```bash
 cd ~/scratch/demo-repo
 claude -p "find the bug that makes test_parse fail and fix it" \
-  --output-format stream-json --verbose --dangerously-skip-permissions > path/to/assignment1/fixtures/events.jsonl
+  --output-format stream-json --verbose --dangerously-skip-permissions > path/to/LLM-visualizer/fixtures/events.jsonl
 ```
 
 To visualize a file without copying it into `fixtures/`, upload it in replay mode: drop it anywhere
@@ -50,16 +65,15 @@ as such a file.
 
 `fixtures/sample-handmade.jsonl` is a synthetic stream (with one subagent) for smoke tests.
 `fixtures/sample-parallel.jsonl` has two subagents running in parallel, then one on its own.
-Two madsLoop traces, written by scripted runs of the real assignment 2 harness (no API key needed):
+Two harness traces, written by scripted runs of a custom agent harness (no API key needed):
 
-- `madsloop_review_demo.jsonl` (`assignment2/scripts/review_demo.py`): every kind of harness
-  action. It has a checklist free turn, read-only calls run early, a loop-guard refusal, a nudge,
-  a `done` refused for open checklist items, and the reviewer subagent. The reviewer is nudged,
-  warned that it is running low on calls, and gets its verdict through the tool-free fallback
-  request. Its "fail" verdict sends the main agent back to work. Every request is recorded in full.
-- `madsloop_context_demo.jsonl` (`assignment2/scripts/context_demo.py`): context management.
-  Old tool results are trimmed, then cleared, then compacted into a summary (the summarizer's
-  call is its own round).
+- `harness_review_demo.jsonl`: every kind of harness action. It has a checklist free turn,
+  read-only calls run early, a loop-guard refusal, a nudge, a `done` refused for open checklist
+  items, and a reviewer subagent. The reviewer is nudged, warned that it is running low on calls,
+  and gets its verdict through a tool-free fallback request. Its "fail" verdict sends the main
+  agent back to work. Every request is recorded in full.
+- `harness_context_demo.jsonl`: context management. Old tool results are trimmed, then cleared,
+  then compacted into a summary (the summarizer's call is its own round).
 
 ## Subagents as a tree
 
@@ -95,7 +109,7 @@ Every line the server sends is recorded per run with a sequence number, its time
 - **Keys:** `[` and `]` move to the previous / next run, `e` jumps to the next failed tool call (across
   all runs, wrapping around), `←` `→` step through rounds in the inspector, `Esc` closes the
   inspector and popovers.
-- **Harness traces** (madsLoop `--trace`): the dialogue also shows the system prompt (folded), who
+- **Harness traces** (see [Harness trace format](#harness-trace-format)): the dialogue also shows the system prompt (folded), who
   each message to the model comes from (task, harness nudge, compacted context), and harness
   decisions as ⚙ lines, inside the card of the call they concern.
 - **Who wrote what:** three colours, in the dialogue and in the chat view. **LLM** (violet) marks
@@ -121,9 +135,9 @@ Every line the server sends is recorded per run with a sequence number, its time
     still holds one click away. After a "model call" divider comes the reply, then what the
     harness did with each tool call, with links to the call where each result is seen. The
     compaction summarizer and the reviewer's verdict fallback are rounds of their own. For
-    madsLoop traces, a banner says whether the rebuild matches the digest of what was really
+    harness traces, a banner says whether the rebuild matches the digest of what was really
     sent (**✓ Exact**). On a mismatch it shows the first differing message and, when the trace
-    recorded it (`--trace-requests`), the request exactly as sent.
+    recorded it (`messages` on `system/llm_request`), the request exactly as sent.
   - *Rounds*, **list** layout: the same round as compact rows. One page per model call (◀ / ▶ or the ← → keys; filter by agent). **Sent to the
     model**: the system prompt, the tool definitions and the message history as that request
     carried it, with messages new since the previous round marked, old tool results shown as
@@ -131,7 +145,7 @@ Every line the server sends is recorded per run with a sequence number, its time
     downloads the request. **Model output**: thinking, text, tool calls, stop reason, tokens.
     **Harness response**: each call's result, with what the harness decided about it (refused,
     blocked, run early, warning or note appended, review verdict), plus nudges and free turns.
-    Exact for madsLoop `--trace` files; for Claude Code's own stream the system prompt and tool
+    Exact for harness traces; for Claude Code's own stream the system prompt and tool
     definitions are not available, so only the conversation part is shown.
     The **R*n*** link on a tool card (on hover) opens the round that made that call. Each round
     also lists what changed in the context since the previous request (trimmed, cleared, or
@@ -142,9 +156,30 @@ Every line the server sends is recorded per run with a sequence number, its time
     row per message and one column per request, showing when each message was trimmed, cleared or
     folded away; a list of every pruning and compaction step with the messages it touched and the
     summary written; and a table view. Click a bar or cell to open that round. Uses the ledger in
-    madsLoop traces; older traces and Claude Code streams are rebuilt from the rounds.
+    harness traces; older traces and Claude Code streams are rebuilt from the rounds.
   - *Events*: every raw event, searchable and filterable by kind.
   - Downloads: `stream .jsonl` (Claude Code's events only, can be used as a replay fixture) and `full log`.
+
+## Harness trace format
+
+To visualize your own agent loop, write a `.jsonl` file shaped like Claude Code's `stream-json`
+output (`system/init`, `assistant`, `user` and `result` events, linked by `tool_use_id` /
+`parent_tool_use_id`). Then add any of these `system` events. Each one is optional and unlocks more of the UI:
+
+| subtype | key fields | unlocks |
+|---|---|---|
+| `init` | `pruning` (trim/clear rule), `tool_schemas`, `resends_reasoning` | marks the file as a harness trace |
+| `system_prompt` | `content` | the system prompt in the dialogue and chat view |
+| `harness` | `action`, `text`, `tool_use_id` | ⚙ harness decisions (refusals, nudges, notes, reviews) |
+| `context` | `messages_sent`, `chars_sent`, `pruned`, `window`, `ledger` | per-request context and the Context tab |
+| `llm_request` | `digest`, `message_count`, optional `messages`, `purpose` | ✓ Exact verification of the chat view |
+| `request` | `purpose`, `messages`, `tool_schemas` | one-off calls (e.g. a compaction summarizer) as their own rounds |
+| `compact_boundary` | | compaction markers |
+
+`digest` is the SHA-256 of the request's messages in canonical form: sorted keys, no spaces, as
+Python's `json.dumps(..., sort_keys=True, separators=(",", ":"), ensure_ascii=False)` writes it.
+`canonRequest` in `static/app.js` defines the exact message shape.
+The `fixtures/harness_*.jsonl` files are complete examples.
 
 ## Layout
 

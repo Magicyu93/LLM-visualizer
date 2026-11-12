@@ -78,8 +78,8 @@ const KIND_INFO = {
   'server/exit': 'process exit code',
   'server/error': 'the run could not start: shown in the status line',
   'client/unparsed': 'a line the page could not parse as JSON',
-  // harness traces (madsLoop --trace)
-  'system/system_prompt': 'the system prompt the agent was given (madsLoop traces)',
+  // harness traces (see "Harness trace format" in README.md)
+  'system/system_prompt': 'the system prompt the agent was given (harness traces)',
   'system/harness': 'a harness decision: a refused, blocked or early call, an appended note, a nudge, a review',
   'system/context': 'what one request contained and what pruning shortened (shown in Rounds)',
   'system/compact_boundary': 'a compaction: older turns replaced by a summary',
@@ -170,7 +170,7 @@ function trackTurn(run, rec, io) {
 }
 
 // When an event happened. A replay arrives at replay speed, so it uses the trace's own
-// timestamps when it has them (madsLoop traces do; Claude Code's stream mostly does not).
+// timestamps when it has them (harness traces do; Claude Code's stream mostly does not).
 function eventTime(run, ev) {
   const ts = run.replay && ev.timestamp ? Date.parse(ev.timestamp) : NaN;
   if (Number.isNaN(ts)) return Date.now();
@@ -748,7 +748,7 @@ function TurnDivider({ run, node }) {
 }
 
 // Who wrote a message to the model that shows up in the dialogue as a prompt.
-const promptActor = (run, role) => role === 'subagent' && !isMadsLoop(run) ? 'llm' : 'harness';
+const promptActor = (run, role) => role === 'subagent' && !isHarnessTrace(run) ? 'llm' : 'harness';
 
 function Items({ run, list }) {
   return segments(list).map(node => {
@@ -1007,7 +1007,7 @@ function Result({ run, call }) {
   const link = html`<span class="result-seq">${dest && html`<span class="rd-go" role="button"
       title=${`this result is sent back to the model in round ${dest.r.n}: open that call`}
       onClick=${e => { e.stopPropagation(); openRound(run, dest.r.n, dest.id); }}>→ R${dest.r.n}</span>`}<${SeqLink} run=${run} seq=${r.rec.seq} /></span>`;
-  const subReport = isAgentCall(call) && !isMadsLoop(run);
+  const subReport = isAgentCall(call) && !isHarnessTrace(run);
   if (subReport && !r.isError && r.text.trim()) {
     // Long reports are clipped to a few lines (markdown can't be cut mid-way safely, so clip visually).
     const long = r.text.split('\n').length > LIMIT || r.text.length > 900;
@@ -1396,7 +1396,7 @@ function Overview({ run }) {
 
 // One round is one model call. For each, rebuild what was sent (the system prompt, the tool
 // definitions, and that agent's message history as it stood, with the harness's pruning applied),
-// what came back, and what the harness did with it. madsLoop traces carry everything needed for
+// what came back, and what the harness did with it. harness traces carry everything needed for
 // this; Claude Code's own stream lacks its system prompt and tool definitions, so there the
 // context is the conversation part only.
 function buildRounds(run) {
@@ -1417,7 +1417,7 @@ function buildRounds(run) {
         c.name = ev.agent || null;
       }
       else if (ev.subtype === 'context') c.ctx = ev;
-      // what the next model call is sent, as a digest (madsLoop traces); the summarizer's own call
+      // what the next model call is sent, as a digest (harness traces); the summarizer's own call
       // belongs to the compaction that follows it, not to the agent's next turn
       else if (ev.subtype === 'llm_request') { if (ev.purpose === 'compaction summary') c.summReq = ev; else c.req = ev; }
       // after a compaction the next user message replaces the issue and older turns
@@ -1511,8 +1511,8 @@ function nextRound(run, r) {
 }
 
 // ---- request digests: proving the rebuilt request is what the model was sent
-// madsLoop traces put a SHA-256 of each request's messages, in a canonical form, on the
-// system/llm_request event before the call (see assignment2/src/trace.py). The page rebuilds the
+// Harness traces put a SHA-256 of each request's messages, in a canonical form, on the
+// system/llm_request event before the call (see "Harness trace format" in README.md). The page rebuilds the
 // same form from the round and compares.
 
 // JSON with sorted keys and no spaces, as Python's json.dumps(sort_keys=True, separators=(',', ':'),
@@ -1589,7 +1589,7 @@ function sha256hex(str) {
 }
 
 // Does the rebuilt request match what was sent? 'exact', 'differs', or 'none' (nothing to check
-// against: an older madsLoop trace, or Claude Code's own stream).
+// against: an older harness trace, or Claude Code's own stream).
 function verifyRound(r) {
   if (r._verify) return r._verify;
   const req = r.req;
@@ -1613,10 +1613,10 @@ function sentText(r, m) {
     return rule ? { text: rule.cleared_text, pruned: p }
       : { text: `[cleared: replaced by a ${fmtNum(p.chars_sent)}-character placeholder this trace does not record]`, pruned: p, approx: true };
   }
-  // Traces written before the rule was recorded: madsLoop keeps the head and the tail, split evenly.
+  // Traces written before the rule was recorded: the reference harness keeps the head and the tail, split evenly.
   const sep = rule?.trim_separator ?? '\n...\n';
   const k = rule?.trim_keep_chars ?? Math.floor((p.chars_sent - sep.length) / 2);
-  // madsLoop slices code points (Python); JS strings index UTF-16 units, which differ past the BMP
+  // The harness slices code points (Python); JS strings index UTF-16 units, which differ past the BMP
   const t = /[\uD800-\uDFFF]/.test(m.text) ? Array.from(m.text) : m.text;
   const cut = (a, b) => (typeof t === 'string' ? t.slice(a, b) : t.slice(a, b).join(''));
   return { text: cut(0, k) + sep + cut(-k), pruned: p };
@@ -1849,7 +1849,7 @@ function Round({ run, r, st }) {
 
 const ACTOR_LABEL = { llm: 'LLM', harness: 'harness', tool: 'tool output' };
 const ActorChip = ({ a }) => html`<span class="actor-chip ${a}">${ACTOR_LABEL[a]}</span>`;
-const isMadsLoop = run => !!run.init?.pruning;
+const isHarnessTrace = run => !!run.init?.pruning;
 
 // Who wrote a tool result: the tool, or the harness when it answered in the tool's place
 // (a refused or blocked call, bad arguments, a `done` refused by the reviewer), or a
@@ -1939,17 +1939,17 @@ function ChatMsg({ run, r, st, m, isNew }) {
         ${st.open[key] && html`<div class="held"><${Folded} id=${`cxf${r.n}.${id}`} text=${m.text} /></div>`}`}
     </${Bubble}>`;
   }
-  const madsLoop = isMadsLoop(run);
+  const harness = isHarnessTrace(run);
   const first = r.msgs[0] === m;
   let actor = 'harness', title;
   if (m.summarizerInput) title = 'user · the older turns as a transcript, rendered by the harness for the summarizer';
   else if (m.compacted) title = 'user · compaction summary, written by the summarizer and placed here by the harness: it replaces the issue and older turns';
   else if (m.fromPage) title = 'user · your prompt';
   else if (r.oneoff) title = 'user · written by the harness for this one-off request';
-  else if (first && r.agent === 'main') title = madsLoop ? 'user · the task: the issue, wrapped by the harness' : 'user · the prompt';
-  else if (first && madsLoop) title = "user · the subagent's brief, written by the harness";
+  else if (first && r.agent === 'main') title = harness ? 'user · the task: the issue, wrapped by the harness' : 'user · the prompt';
+  else if (first && harness) title = "user · the subagent's brief, written by the harness";
   else if (first) { actor = 'llm'; title = 'user · prompt written by the parent agent'; }
-  else title = madsLoop ? 'user · harness message (a nudge)' : 'user · message';
+  else title = harness ? 'user · harness message (a nudge)' : 'user · message';
   return html`<${Bubble} actor=${actor} id=${id} title=${title}
     badges=${html`${neu}${m.compacted && html`<span class="badge-sm pruned">compacted</span>`}`}>
     <${Folded} id=${`cx${r.n}.${id}`} text=${m.text} />
@@ -1965,10 +1965,10 @@ function VerifyBanner({ run, r }) {
   }
   if (v.status === 'differs') {
     return html`<div class="vf err">⚠ <b>The rebuild differs from what was sent</b>${v.firstDiff != null ? ` (first difference at message ${v.firstDiff + 1})` : ''}.
-      ${v.recorded ? 'The recorded request is below, exactly as sent.' : 'This trace has only the digest; record full requests with madsLoop --trace-requests.'}
+      ${v.recorded ? 'The recorded request is below, exactly as sent.' : 'This trace has only the digest; record full requests by logging each request in full (`system/llm_request` with `messages`).'}
       ${v.recorded && html`<details><summary>recorded request (${plural(v.recorded.length, 'message')})</summary><pre class="json">${JSON.stringify(v.recorded, null, 2)}</pre></details>`}</div>`;
   }
-  return html`<div class="vf none">Rebuilt from the trace, not verified: ${isMadsLoop(run)
+  return html`<div class="vf none">Rebuilt from the trace, not verified: ${isHarnessTrace(run)
     ? 'this trace was written before request digests were recorded.'
     : "Claude Code's stream has no request digests, system prompt or tool definitions."}</div>`;
 }
@@ -2022,7 +2022,7 @@ function ChatRound({ run, r, st }) {
       ${r.tools && html`<button class="link small" onClick=${() => toggle(st.open, `ctools${r.n}`, false)}>${st.open[`ctools${r.n}`] ? 'hide' : 'show'} the JSON schemas</button>
         ${st.open[`ctools${r.n}`] && html`<pre class="json">${JSON.stringify(r.tools, null, 2)}</pre>`}`}
     </${Bubble}>`}
-    ${r.system == null && !r.oneoff && !isMadsLoop(run) && html`<div class="rd-banner muted">Claude Code's stream does not include its system prompt or tool definitions: only the conversation part of the request is shown.</div>`}
+    ${r.system == null && !r.oneoff && !isHarnessTrace(run) && html`<div class="rd-banner muted">Claude Code's stream does not include its system prompt or tool definitions: only the conversation part of the request is shown.</div>`}
     ${kept.length > 0 && html`
       <button class="cm-group" onClick=${() => toggle(st.open, keptKey, false)}>
         ${st.open[keptKey] ? '▾' : '▸'} ${plural(kept.length, 'earlier message')}, resent unchanged${prevR ? ` from round ${prevR.n}` : ''}${prunedKept ? html` · <b>${prunedKept} shortened by pruning</b>` : ''}</button>
@@ -2136,7 +2136,7 @@ function CtxMsg({ run, r, st, m, k, isNew }) {
 // ---------------------------------------------------------------- context over time
 
 // How the main agent's context changed from request to request: which messages it held, in what
-// state (sent whole, trimmed, cleared), and what compaction folded away for good. madsLoop traces
+// state (sent whole, trimmed, cleared), and what compaction folded away for good. harness traces
 // record this as a `ledger` on every system/context event; for older traces (and Claude Code's own
 // stream) it is rebuilt from the rounds.
 const CTX_STATES = {
@@ -2586,7 +2586,7 @@ function App() {
 
   return html`
     <header class="top">
-      <div class="brand">Mads-Lens</div>
+      <div class="brand">LLM Visualizer</div>
       <div class="seg" role="radiogroup" aria-label="mode">
         ${[['live', 'Live', 'run the agent on a prompt'], ['replay', 'Replay', 'visualize a recorded .jsonl trace']].map(([m, label, tip]) => html`
           <button class=${store.mode === m ? 'on' : ''} role="radio" aria-checked=${store.mode === m} title=${tip}
@@ -2641,5 +2641,5 @@ function App() {
 
 render(html`<${App} />`, document.getElementById('app'));
 
-// For automated checks of the page (see assignment1/README.md); not used by the page itself.
+// For automated checks of the page (see README.md); not used by the page itself.
 window.__lens = { store, changed, buildRounds, verifyRound, canonRequest, canonJSON, sha256hex };
