@@ -12,8 +12,11 @@ const store = {
   runs: [],
   cwd: load('cwd', ''),
   mode: 'live',          // 'live' or 'replay'
-  trace: '',             // replay source: a fixture filename, or FILE_MODE + the name of an uploaded file
-  fixtures: [],
+  trace: '',             // replay source: a path in the server's trace folder, or FILE_MODE + the name of an uploaded file
+  fixtures: [],          // paths in the server's trace folder; a subfolder (e.g. one per run) is a group in the picker
+  traceGroup: load('traceGroup', null),  // the picker's selected group: a subfolder, '' for top level, or UPLOADED
+  tracesDir: '',         // the server's trace folder
+  examples: true,        // the trace folder is the bundled fixtures/ (no TRACES_DIR set)
   speed: load('speed', 'normal'),  // replay speed: 'instant', 'fast' or 'normal'
   files: {},             // name -> text of .jsonl files the user dropped or picked (kept in this tab only)
   fileError: null,       // why the last loaded file was rejected
@@ -339,17 +342,50 @@ async function loadReplayFile(file) {
   }
   store.files[file.name] = text;
   store.trace = FILE_MODE + file.name;
+  store.traceGroup = UPLOADED;
   store.fileError = null;
   changed();
   startReplay();
 }
 
 const replayName = trace => trace.startsWith(FILE_MODE) ? trace.slice(FILE_MODE.length) : trace;
+
+// The replay picker: first a group (a subfolder of the trace folder, e.g. one per run), then a trace in it.
+const UPLOADED = '\u0000uploaded';
+const groupOf = f => f.includes('/') ? f.slice(0, f.lastIndexOf('/')) : '';
+const traceLabel = f => f.slice(f.lastIndexOf('/') + 1).replace(/\.jsonl$/, '');
+function traceGroups() {
+  const groups = [...new Set(store.fixtures.map(groupOf))];
+  if (Object.keys(store.files).length) groups.unshift(UPLOADED);
+  return groups;
+}
+function selectedGroup() {
+  const groups = traceGroups();
+  return groups.includes(store.traceGroup) ? store.traceGroup : groups[0];
+}
+function tracesIn(group) {
+  return group === UPLOADED
+    ? Object.keys(store.files).map(f => [FILE_MODE + f, f])
+    : store.fixtures.filter(f => groupOf(f) === group).map(f => [f, traceLabel(f)]);
+}
+const groupLabel = g => g === UPLOADED ? 'uploaded files' : g || '(top level)';
+const sourceLabel = run => run.replayFile ? 'uploaded file' : store.examples ? 'example in fixtures/' : `in ${store.tracesDir}`;
+
+function loadConfig() {
+  return fetch('/api/config', { headers }).then(r => r.json()).then(c => {
+    store.fixtures = c.fixtures || [];
+    store.tracesDir = c.traces_dir || '';
+    store.examples = c.examples ?? true;
+    if (!store.cwd && c.default_cwd) store.cwd = c.default_cwd;
+    changed();
+  });
+}
 const runTitle = run => run.replay ? `replay: ${run.replay}` : run.prompt;
 const pickFile = () => document.getElementById('trace-file')?.click();
 
 function setMode(mode) {
   store.mode = mode;
+  if (mode === 'replay') loadConfig();   // pick up traces converted since the page loaded
   store.fileError = null;
   changed();
 }
@@ -448,7 +484,7 @@ function jumpTo(run, call) {
   stickToBottom = false;
   rerender();
   requestAnimationFrame(() => {
-    if (window.matchMedia('(max-width: 860px)').matches) store.ui.outlineOpen = false;
+    if (outlineIsDrawer()) store.ui.outlineOpen = false;
     rerender();
     const el = document.getElementById(callDomId(run, call));
     if (!el) return;
@@ -464,8 +500,68 @@ function openInspector(run, seq) {
     runId: run.id, tab: seq ? 'events' : (same ? prev.tab : 'overview'),
     q: same ? prev.q : '', kind: '', open: { ...(same ? prev.open : {}), ...(seq ? { [seq]: true } : {}) },
   };
+  rememberAnchor();
   rerender();
   if (seq) requestAnimationFrame(() => document.getElementById('ev-' + seq)?.scrollIntoView({ block: 'center' }));
+}
+
+function closeInspector() {
+  rememberAnchor();
+  store.ui.inspect = null;
+  changed();
+}
+
+// On wide windows the inspector docks beside the dialogue, which moves over to share the width,
+// instead of covering it. Its share of the window is set by dragging its left edge, and remembered.
+const DOCK_MIN = 1100, PANE_MIN = 460, FRAC_MIN = 0.3, FRAC_MAX = 0.75;
+const clampFrac = f => Math.min(FRAC_MAX, Math.max(FRAC_MIN, f));
+let insFrac = clampFrac(parseFloat(load('insFrac', '0.5')) || 0.5);
+function insLayout() {
+  const W = window.innerWidth;
+  const st = store.ui.inspect;
+  const docked = !!st && store.runs.some(r => r.id === st.runId) && W >= DOCK_MIN;
+  const w = Math.round(Math.min(W - PANE_MIN, Math.max(PANE_MIN, W * insFrac)));
+  const cl = document.body.classList;
+  cl.toggle('ins-docked', docked);
+  // too little room left for the outline beside the dialogue: the outline becomes a drawer
+  cl.toggle('ins-tight', docked && W - w < 960);
+  if (docked) document.documentElement.style.setProperty('--ins-w', w + 'px');
+}
+// The outline is a drawer at phone width, and beside a docked inspector when room is short.
+const outlineIsDrawer = () => window.matchMedia('(max-width: 860px)').matches || document.body.classList.contains('ins-tight');
+function startResize(e) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  const el = e.currentTarget;
+  el.setPointerCapture(e.pointerId);
+  document.body.classList.add('resizing');
+  const move = ev => { insFrac = clampFrac((window.innerWidth - ev.clientX) / window.innerWidth); insLayout(); };
+  const up = () => {
+    el.removeEventListener('pointermove', move);
+    el.removeEventListener('lostpointercapture', up);
+    document.body.classList.remove('resizing');
+    save('insFrac', insFrac.toFixed(3));
+    changed();   // the outline's room may have changed
+  };
+  el.addEventListener('pointermove', move);
+  el.addEventListener('lostpointercapture', up);
+}
+function resetResize() { insFrac = 0.5; save('insFrac', '0.5'); rememberAnchor(); changed(); }
+
+// Opening or closing the docked inspector reflows the dialogue; keep what was being looked at in place.
+let pendingAnchor = null, lastDown = null;
+window.addEventListener('pointerdown', e => { lastDown = { el: e.target, t: performance.now() }; }, true);
+function rememberAnchor() {
+  const a = lastDown && performance.now() - lastDown.t < 1500 ? lastDown.el : document.activeElement;
+  let el = a && a !== document.body && a.closest?.('.dialogue') ? a : null;
+  el ||= [...document.querySelectorAll('.dialogue .you, .dialogue .turn-div, .dialogue .call, .dialogue .llm-say, .dialogue .fork-head')]
+    .find(x => x.getBoundingClientRect().bottom > 80);
+  pendingAnchor = el ? { el, top: el.getBoundingClientRect().top } : null;
+}
+function restoreAnchor() {
+  const a = pendingAnchor;
+  pendingAnchor = null;
+  if (a && a.el.isConnected && !stickToBottom) window.scrollBy(0, a.el.getBoundingClientRect().top - a.top);
 }
 
 function downloadFile(name, text, type) {
@@ -1098,7 +1194,7 @@ function Run({ run }) {
         </div>
         <div class="prompt">${run.replay ? html`<code>${run.replay}</code>` : run.prompt}</div>
         <div class="meta">
-          ${run.replay ? (run.replayFile ? 'uploaded file' : 'example in fixtures/') : run.cwd || '.'}
+          ${run.replay ? sourceLabel(run) : run.cwd || '.'}
           ${run.resume && html` · resumed session ${short(run.resume)}`}
           ${run.model && html` · ${run.model}`}
         </div>
@@ -1187,7 +1283,7 @@ function olPill(run, c, lane) {
 // Outline width: 230px, widened (up to OL_MAX) so parallel columns fit; the narrow drawer is fixed.
 const OL_MIN = 230, OL_MAX = 440, OL_PAD = 24 + 13;
 function Outline() {
-  const narrow = window.matchMedia('(max-width: 860px)').matches;
+  const narrow = outlineIsDrawer();
   const room = (narrow ? Math.min(280, window.innerWidth * 0.85) : OL_MAX) - OL_PAD;
   const ctx = { width: 0, offset: 0 };
   const rows = [];
@@ -1311,12 +1407,14 @@ function Inspector() {
   }, null, 2);
   return html`
     <aside class="inspector">
+      <div class="ins-resize" onPointerDown=${startResize} onDblClick=${resetResize}
+        title="drag to resize · double-click to split evenly"></div>
       <div class="ins-head">
         <div>
           <div class="ins-title">Run ${idx} · inspector</div>
           <div class="ins-sub">${oneLine(runTitle(run), 90)}</div>
         </div>
-        <button class="x" onClick=${() => { store.ui.inspect = null; changed(); }} title="close (Esc)">×</button>
+        <button class="x" onClick=${closeInspector} title="close (Esc)">×</button>
       </div>
       <div class="ins-tabs">
         ${tab('overview', 'Overview')}
@@ -1350,7 +1448,7 @@ function Overview({ run }) {
     <h3>Input</h3>
     <${KV} rows=${[
       run.replay
-        ? ['source', html`<code>${run.replayFile ? run.replay : 'fixtures/' + run.replay}</code>${run.replayFile ? ' (loaded file)' : ''}`]
+        ? ['source', html`<code>${run.replayFile ? run.replay : (store.examples ? 'fixtures' : store.tracesDir) + '/' + run.replay}</code>${run.replayFile ? ' (loaded file)' : ''}`]
         : ['prompt', html`<pre class="box">${run.prompt}</pre>`],
       !run.replay && ['working directory', html`<code>${run.cwd || '.'}</code>${run.absCwd && run.absCwd !== run.cwd ? html` → <code>${run.absCwd}</code>` : ''}`],
       ['mode', run.replay ? 'replay: the recorded events are shown, nothing is started' : 'live'],
@@ -1717,6 +1815,7 @@ function openRound(run, n, focus = null) {
   const same = prev && prev.runId === run.id;
   if (focus && store.ui.roundLayout !== 'chat') { store.ui.roundLayout = 'chat'; save('roundLayout', 'chat'); }
   store.ui.inspect = { runId: run.id, tab: 'rounds', round: n, agent: '', q: same ? prev.q : '', kind: '', open: same ? prev.open : {}, focus };
+  rememberAnchor();
   rerender();
 }
 
@@ -1782,6 +1881,7 @@ function Round({ run, r, st }) {
   const general = r.harness.filter(h => !h.ev.tool_use_id || !calls.some(b => b.id === h.ev.tool_use_id));
   const lastMain = r.agent === 'main' && buildRounds(run).filter(x => x.agent === 'main').pop() === r;
   return html`
+    <div class="rd-io">
     <section class="rd-sec in">
       <h4>→ Sent to the model
         <span class="rd-stat">${plural(r.msgs.length + (r.system != null ? 1 : 0), 'message')} · ${fmtNum(chars)} chars${usage.input_tokens != null ? ` · ${fmtNum(usage.input_tokens)} input tokens` : ''}</span></h4>
@@ -1819,6 +1919,7 @@ function Round({ run, r, st }) {
         ${!calls.length && !replyText(r.reply).trim() && !replyThinking(r.reply) && html`<p class="muted small">(empty reply)</p>`}
       </div>
     </section>
+    </div>
 
     <section class="rd-sec hz-sec">
       <h4>⚙ Harness response</h4>
@@ -2557,7 +2658,8 @@ window.addEventListener('keydown', e => {
 window.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   if (store.ui.filterOpen) store.ui.filterOpen = false;
-  else store.ui.inspect = null;
+  else if (store.ui.outlineOpen && outlineIsDrawer()) store.ui.outlineOpen = false;
+  else if (store.ui.inspect) return closeInspector();
   changed();
 });
 
@@ -2567,13 +2669,10 @@ const KEYS_HINT = html`keys: <kbd>[</kbd> <kbd>]</kbd> previous / next run · <k
 function App() {
   const [, force] = useReducer(x => x + 1, 0);
   rerender = force;
+  insLayout();
 
   useEffect(() => {
-    fetch('/api/config', { headers }).then(r => r.json()).then(c => {
-      store.fixtures = c.fixtures || [];
-      if (!store.cwd && c.default_cwd) store.cwd = c.default_cwd;
-      changed();
-    });
+    loadConfig();
     const t = setInterval(() => { if (store.runs.some(r => r.status === 'running')) changed(); }, 1000);
     const onResize = () => changed();   // the outline's room depends on the window width
     window.addEventListener('resize', onResize);
@@ -2582,6 +2681,7 @@ function App() {
 
   useLayoutEffect(() => {
     if (stickToBottom) window.scrollTo(0, document.documentElement.scrollHeight);
+    restoreAnchor();
   });
 
   return html`
@@ -2597,12 +2697,18 @@ function App() {
         <input value=${store.cwd} placeholder="~/scratch/demo-repo" spellcheck="false"
           onInput=${e => { store.cwd = e.target.value; changed(); }} />
       </label>`}
-      ${store.mode === 'replay' && html`<label class="trace">
+      ${store.mode === 'replay' && traceGroups().length > 1 && html`<label class="trace-group">
+        <span>run</span>
+        <select value=${selectedGroup()} onChange=${e => { store.traceGroup = e.target.value; save('traceGroup', e.target.value); changed(); }}>
+          ${traceGroups().map(g => html`<option value=${g}>${groupLabel(g)} · ${tracesIn(g).length}</option>`)}
+        </select>
+      </label>`}
+      ${store.mode === 'replay' && html`<label class="trace" title=${store.examples ? 'examples in fixtures/' : store.tracesDir}>
         <span>trace</span>
-        <select value=${store.trace} onChange=${e => { store.trace = e.target.value; store.fileError = null; changed(); startReplay(); }}>
-          <option value="" disabled>choose a trace…</option>
-          ${Object.keys(store.files).map(f => html`<option value=${FILE_MODE + f}>${f} (uploaded)</option>`)}
-          ${store.fixtures.map(f => html`<option value=${f}>${f} (example)</option>`)}
+        <select value=${tracesIn(selectedGroup()).some(([v]) => v === store.trace) ? store.trace : ''}
+          onChange=${e => { store.trace = e.target.value; store.fileError = null; changed(); startReplay(); }}>
+          <option value="" disabled>${tracesIn(selectedGroup()).length ? 'choose a trace…' : `no .jsonl traces in ${store.tracesDir}`}</option>
+          ${tracesIn(selectedGroup()).map(([v, label]) => html`<option value=${v}>${label}${store.examples && !v.startsWith(FILE_MODE) ? ' (example)' : ''}</option>`)}
         </select>
       </label>`}
       <input type="file" id="trace-file" hidden accept=".jsonl,.ndjson,.json,.txt"

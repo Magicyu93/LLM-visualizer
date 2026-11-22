@@ -72,6 +72,7 @@ All optional, set as environment variables:
 | `DEFAULT_CWD` | empty | pre-filled working directory |
 | `CLAUDE_PERMISSION_ARGS` | `--dangerously-skip-permissions` | e.g. `--allowedTools Edit Read "Bash(pytest:*)"` |
 | `REPLAY_DELAY` | `0.12` | seconds between events at *Normal* replay speed |
+| `TRACES_DIR` | `fixtures/` | folder of `.jsonl` traces offered in Replay mode, replacing the examples. Subfolders (one level) become a **run** picker, e.g. `runs/<run>/<task>.jsonl` |
 | `ACCESS_TOKEN` | unset | require `?token=…` on every request (set it before exposing the server) |
 
 ## Bring your own harness

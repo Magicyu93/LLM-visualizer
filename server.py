@@ -25,7 +25,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 ROOT = Path(__file__).resolve().parent
-FIXTURES = ROOT / "fixtures"
+# Traces offered in Replay mode. TRACES_DIR replaces the bundled examples with your own folder;
+# .jsonl files directly in it and one level of subfolders (e.g. one folder per run) are listed.
+FIXTURES = Path(os.environ.get("TRACES_DIR") or ROOT / "fixtures").expanduser().resolve()
 STATIC = ROOT / "static"
 
 DEFAULT_CWD = os.environ.get("DEFAULT_CWD", "")
@@ -165,7 +167,7 @@ async def run_replay(req: RunRequest, run_id: str):
         lines = req.replay_text.split("\n")   # not splitlines(): JSON may hold a raw U+2028
     else:
         path = (FIXTURES / req.replay).resolve()
-        if path.parent != FIXTURES or not path.is_file():
+        if FIXTURES not in path.parents or not path.is_file():
             yield server_event("error", message=f"no such fixture: {req.replay}")
             return
         lines = path.read_text(encoding="utf-8").split("\n")
@@ -242,8 +244,12 @@ async def control_replay(run_id: str, ctl: ReplayControl):
 
 @app.get("/api/config")
 async def config():
-    fixtures = sorted(p.name for p in FIXTURES.glob("*.jsonl")) if FIXTURES.is_dir() else []
-    return {"default_cwd": DEFAULT_CWD, "fixtures": fixtures}
+    fixtures = []
+    if FIXTURES.is_dir():
+        found = [*FIXTURES.glob("*.jsonl"), *FIXTURES.glob("*/*.jsonl")]
+        fixtures = sorted(p.relative_to(FIXTURES).as_posix() for p in found)
+    return {"default_cwd": DEFAULT_CWD, "fixtures": fixtures, "traces_dir": str(FIXTURES),
+            "examples": FIXTURES == (ROOT / "fixtures").resolve()}
 
 
 app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")

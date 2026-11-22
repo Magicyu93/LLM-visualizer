@@ -51,6 +51,8 @@ pre { font: 12.5px/1.45 var(--mono); margin: 0; white-space: pre-wrap; word-brea
 .cwd { flex: 1; min-width: 200px; }
 .trace { flex: 1; min-width: 200px; max-width: 460px; }
 .trace select { width: 100%; }
+.trace-group { min-width: 160px; max-width: 320px; }
+.trace-group select { width: 100%; }
 .seg { display: inline-flex; flex: none; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
 .seg button { font-size: 13px; font-weight: 600; padding: 0.3rem 0.85rem; border-radius: 6px; color: var(--muted); }
 .seg button:hover { color: var(--ink); }
@@ -93,7 +95,7 @@ pre { font: 12.5px/1.45 var(--mono); margin: 0; white-space: pre-wrap; word-brea
   .top label > span { display: none; }
   .brand { display: none; }
   /* the mode toggle and buttons share the first row; the folder or trace gets its own row */
-  .cwd, .trace { flex-basis: 100%; max-width: none; order: 5; }
+  .cwd, .trace, .trace-group { flex-basis: 100%; max-width: none; order: 5; }
   .ol-toggle { display: block; }
   .outline { display: none; position: fixed; top: 0; left: 0; bottom: 0; width: min(280px, 85vw); z-index: 35;
     background: var(--panel); border-right: 1px solid var(--line); max-height: none; box-shadow: 10px 0 30px rgba(0,0,0,.18); }
@@ -728,3 +730,58 @@ table.mini { border-collapse: collapse; font-size: 12px; }
   .rd-nav select { flex: 1 1 100%; order: -1; }
   .rd-nav select.rd-agent { flex: 1 1 auto; order: 0; }
 }
+
+/* ---------- docked inspector: on wide windows it shares the width with the dialogue instead of covering it */
+.inspector { transition: box-shadow 0.15s; }
+.ins-resize { display: none; }
+body.ins-docked .inspector { width: var(--ins-w); box-shadow: -1px 0 0 var(--line), -12px 0 28px -18px rgba(0,0,0,.25); border-left: 0; }
+body.ins-docked .layout {
+  max-width: calc(var(--ol-w, 230px) + 970px);
+  margin: 0 var(--ins-w) 0 max(0px, calc((100% - var(--ins-w) - var(--ol-w, 230px) - 970px) / 2));
+}
+body.ins-docked .top { padding-right: calc(var(--ins-w) + 1rem); }
+body.ins-docked .trace { min-width: 160px; }
+body.ins-docked .ins-resize { display: block; position: absolute; top: 0; bottom: 0; left: -4px; width: 9px; z-index: 5; cursor: col-resize; touch-action: none; }
+.ins-resize::after { content: ''; position: absolute; top: 50%; left: 3px; width: 3px; height: 42px; margin-top: -21px;
+  border-radius: 2px; background: var(--line); transition: background 0.12s, height 0.12s, margin 0.12s; }
+.ins-resize:hover::after, body.resizing .ins-resize::after { background: var(--accent); height: 72px; margin-top: -36px; }
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing .inspector, body.resizing .layout { pointer-events: none; }
+/* beside a docked inspector with little room left, the outline becomes a drawer, as at phone width */
+body.ins-tight .layout { grid-template-columns: minmax(0, 1fr); max-width: 970px; }
+body.ins-tight .ol-toggle { display: block; }
+body.ins-tight .brand { display: none; }
+body.ins-tight .outline { display: none; position: fixed; top: 0; left: 0; bottom: 0; width: min(280px, 85vw); height: 100vh; max-height: none;
+  z-index: 35; background: var(--panel); --ol-bg: var(--panel); box-shadow: 10px 0 30px rgba(0,0,0,.18); }
+body.ins-tight .outline.shown { display: block; }
+body.ins-tight .ol-close { display: inline; }
+
+/* rounds, list layout: what was sent and what came back side by side when the inspector is wide */
+.ins-body { container-type: inline-size; }
+@container (min-width: 820px) {
+  .rd-io { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0.7rem; align-items: start; }
+  .rd-io > .rd-sec { margin-bottom: 0.7rem; }
+  .rd-io > .rd-sec.out { position: sticky; top: 2.6rem; max-height: calc(100vh - 12rem); overflow: auto; }
+  .bub { width: 80%; }
+  .cx-stats { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+}
+
+/* ---------- polish */
+.top { box-shadow: 0 1px 0 var(--line), 0 6px 16px -14px rgba(0,0,0,.35); border-bottom: 0; }
+.call { box-shadow: 0 1px 2px rgba(0,0,0,.04); transition: border-color 0.12s, box-shadow 0.12s; }
+.call:hover { box-shadow: 0 2px 8px rgba(0,0,0,.07); }
+.you { border: 1px solid color-mix(in srgb, var(--accent) 14%, transparent); }
+.ins-head { padding: 0.9rem 1.1rem 0.5rem; }
+.ins-title { font-size: 15px; }
+.ins-tabs { padding: 0 1.1rem; background: var(--panel); }
+.tab { transition: color 0.12s, border-color 0.12s; }
+.tab:hover { color: var(--ink); }
+.ins-body { padding: 0.7rem 1.1rem 2rem; background: color-mix(in srgb, var(--bg) 55%, var(--panel)); }
+.rd-nav { top: -0.7rem; margin: -0.7rem -1.1rem 0.7rem; padding: 0.5rem 1.1rem; }
+.rd-sec { background: var(--panel); box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+.rd-sec > h4 { border-bottom: 1px solid var(--line); }
+.bub { box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+.x { border-radius: 6px; }
+.x:hover { color: var(--ink); background: var(--code-bg); }
+.outline::-webkit-scrollbar, .ins-body::-webkit-scrollbar { width: 9px; }
+.outline::-webkit-scrollbar-thumb, .ins-body::-webkit-scrollbar-thumb { background: var(--line); border-radius: 9px; border: 2px solid transparent; background-clip: content-box; }
